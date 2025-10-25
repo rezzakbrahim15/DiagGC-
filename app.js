@@ -1,104 +1,47 @@
-// --- Utilitaires DOM
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => document.querySelectorAll(s);
+async function diagnostiquer() {
+  const fileInput = document.querySelector("input[type='file']");
+  const statusEl = document.querySelector(".status");
+  const resultEl = document.querySelector(".results");
 
-const elOuvrage = $("#ouvrage");
-const elAuteur  = $("#auteur");
-const elCfg     = $("#cfg");
-const elFile    = $("#file");
-const elCam     = $("#camera");
-const elBtn     = $("#btn");
-const elClr     = $("#clear");
-const elStatus  = $("#status");
-const tbRes     = $("#tbl-results tbody");
-const tbScnf    = $("#tbl-scnf tbody");
+  if (!fileInput.files.length) {
+    alert("Choisis une image avant de lancer le diagnostic !");
+    return;
+  }
 
-// --- Mapping simple vers règles SNCF
-function mapSNCF(label) {
-  const k = label.toLowerCase();
+  const file = fileInput.files[0];
 
-  if (/(fissure|crack)/.test(k))        return { degre: "Réparation à court terme",   urgence: "Très urgent",  u: "red" };
-  if (/(éclatement|spall|spalling)/.test(k)) return { degre: "Réparation immédiate",     urgence: "Très urgent",  u: "red" };
-  if (/(corrosion|armature|rebar|rust)/.test(k)) return { degre: "Réparation planifiée",   urgence: "Moyen",       u: "amber" };
-  if (/(efflorescen|salitre)/.test(k))  return { degre: "Observation / Entretien",  urgence: "Faible",      u: "vert" };
-  if (/(végét|mousse|plante|vegetation)/.test(k)) return { degre: "Entretien",              urgence: "Faible",      u: "vert" };
-  if (/(infiltration|humidité|moist|leak)/.test(k)) return { degre: "Diagnostic complémentaire", urgence: "Moyen", u: "amber" };
-  if (/(déformation|déflection|warping|bending)/.test(k)) return { degre: "Surveillance renforcée", urgence: "Moyen à urgent", u: "amber" };
-  if (/(altération|degradation|deterioration)/.test(k)) return { degre: "Réparation planifiée", urgence: "Moyen", u: "amber" };
+  // Empêche les HEIC/HEIF non supportés
+  const okTypes = ["image/jpeg", "image/png", "image/webp"];
+  if (!okTypes.includes(file.type)) {
+    alert("Format non supporté (HEIC). Fais une capture d’écran ou convertis en JPG/PNG.");
+    return;
+  }
 
-  return { degre: "Observation", urgence: "Faible", u: "vert" };
-}
-
-// --- Helpers affichage
-function pill(text, tone) {
-  const cls = tone === "red" ? "u-red" : tone === "amber" ? "u-amber" : "u-vert";
-  return `<span class="pill ${cls}">${text}</span>`;
-}
-
-function setStatus(txt){ elStatus.textContent = txt; }
-
-// --- Lecture du fichier choisi (galerie ou caméra)
-function getChosenFile() {
-  return elCam.files?.[0] || elFile.files?.[0] || null;
-}
-
-// --- Action: diagnostiquer
-elBtn.addEventListener("click", async () => {
-  const file = getChosenFile();
-  if (!file) { setStatus("Choisis ou prends une photo."); return; }
-
-  elBtn.disabled = true;
-  setStatus("Analyse en cours…");
-
-  // Construire le FormData pour /api/predict
-  const fd = new FormData();
-  fd.append("image", file, file.name);
-  fd.append("ouvrage", elOuvrage.value || "");
-  fd.append("auteur",  elAuteur.value  || "");
-  fd.append("config",  elCfg.value     || "[]");
+  statusEl.textContent = "⏳ Analyse en cours...";
+  resultEl.textContent = "";
 
   try {
-    const r = await fetch("/api/predict", { method: "POST", body: fd });
-    if (!r.ok) throw new Error(`Erreur serveur (${r.status})`);
-    const data = await r.json();
+    const formData = new FormData();
+    formData.append("file", file);
 
-    // data.top = [{label, score}] (selon l’API fournie côté /api/predict)
-    const top = (data.top || data || []).slice(0, 8);
+    const response = await fetch("/api/predict", {
+      method: "POST",
+      body: formData
+    });
 
-    // Tableau résultats bruts
-    tbRes.innerHTML = top.map(x =>
-      `<tr><td>${x.label}</td><td>${(x.score*100).toFixed(1)} %</td></tr>`
-    ).join("") || `<tr><td colspan="2" class="muted">Aucun résultat</td></tr>`;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Erreur IA");
 
-    // Interprétation SNCF
-    const seen = new Set();
-    tbScnf.innerHTML = top.map(x => {
-      if (seen.has(x.label.toLowerCase())) return "";
-      seen.add(x.label.toLowerCase());
-
-      const m = mapSNCF(x.label);
-      const urg = m.u === "red" ? pill(m.urgence,"red")
-               : m.u === "amber" ? pill(m.urgence,"amber")
-               : pill(m.urgence,"vert");
-
-      return `<tr>
-        <td>${x.label}</td>
-        <td>${m.degre}</td>
-        <td>${urg}</td>
-      </tr>`;
-    }).join("") || `<tr><td colspan="3" class="muted">Rien à interpréter</td></tr>`;
-
-    setStatus("Terminé ✅");
-  } catch (e) {
-    console.error(e);
-    setStatus("Erreur : " + e.message);
-  } finally {
-    elBtn.disabled = false;
+    // Résultat IA
+    statusEl.textContent = "✅ Analyse terminée";
+    resultEl.innerHTML = `
+      <p><strong>Label :</strong> ${data.label || "inconnu"}</p>
+      <p><strong>Score :</strong> ${(data.score * 100).toFixed(2)}%</p>
+    `;
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "❌ Erreur lors du diagnostic";
   }
-});
+}
 
-// --- Effacer
-elClr.addEventListener("click", () => {
-  elFile.value = ""; elCam.value=""; tbRes.innerHTML = ""; tbScnf.innerHTML = "";
-  setStatus("En attente…");
-});
+document.querySelector("button.diagnostiquer").addEventListener("click", diagnostiquer);
