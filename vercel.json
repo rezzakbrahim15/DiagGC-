@@ -1,9 +1,11 @@
 {
   "version": 2,
-  "functions": {
-    "api/predict.js": {
-      "memory": 1024,
-      "maxDuration": 20
-    }
-  }
+  "builds": [
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "api/predict.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/predict.js" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
 }
