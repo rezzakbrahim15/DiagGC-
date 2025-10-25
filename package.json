@@ -1,0 +1,12 @@
+{
+  "name": "diaggc",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "vercel dev"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0"
+  }
+}

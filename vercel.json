@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "functions": {
+    "api/predict.js": {
+      "memory": 1024,
+      "maxDuration": 20
+    }
+  }
+}
