@@ -1,87 +1,104 @@
-function readJSON() {
-  try { return JSON.parse(document.getElementById('config').value); }
-  catch(e){ alert('JSON invalide dans la configuration IA.'); throw e; }
+// --- Utilitaires DOM
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
+const elOuvrage = $("#ouvrage");
+const elAuteur  = $("#auteur");
+const elCfg     = $("#cfg");
+const elFile    = $("#file");
+const elCam     = $("#camera");
+const elBtn     = $("#btn");
+const elClr     = $("#clear");
+const elStatus  = $("#status");
+const tbRes     = $("#tbl-results tbody");
+const tbScnf    = $("#tbl-scnf tbody");
+
+// --- Mapping simple vers règles SNCF
+function mapSNCF(label) {
+  const k = label.toLowerCase();
+
+  if (/(fissure|crack)/.test(k))        return { degre: "Réparation à court terme",   urgence: "Très urgent",  u: "red" };
+  if (/(éclatement|spall|spalling)/.test(k)) return { degre: "Réparation immédiate",     urgence: "Très urgent",  u: "red" };
+  if (/(corrosion|armature|rebar|rust)/.test(k)) return { degre: "Réparation planifiée",   urgence: "Moyen",       u: "amber" };
+  if (/(efflorescen|salitre)/.test(k))  return { degre: "Observation / Entretien",  urgence: "Faible",      u: "vert" };
+  if (/(végét|mousse|plante|vegetation)/.test(k)) return { degre: "Entretien",              urgence: "Faible",      u: "vert" };
+  if (/(infiltration|humidité|moist|leak)/.test(k)) return { degre: "Diagnostic complémentaire", urgence: "Moyen", u: "amber" };
+  if (/(déformation|déflection|warping|bending)/.test(k)) return { degre: "Surveillance renforcée", urgence: "Moyen à urgent", u: "amber" };
+  if (/(altération|degradation|deterioration)/.test(k)) return { degre: "Réparation planifiée", urgence: "Moyen", u: "amber" };
+
+  return { degre: "Observation", urgence: "Faible", u: "vert" };
 }
-function pickFile() {
-  const a = document.getElementById('file');
-  const b = document.getElementById('camera');
-  return a.files[0] || b.files[0] || null;
+
+// --- Helpers affichage
+function pill(text, tone) {
+  const cls = tone === "red" ? "u-red" : tone === "amber" ? "u-amber" : "u-vert";
+  return `<span class="pill ${cls}">${text}</span>`;
 }
-function renderJSON(id, data) {
-  document.getElementById(id).textContent = JSON.stringify(data, null, 2);
+
+function setStatus(txt){ elStatus.textContent = txt; }
+
+// --- Lecture du fichier choisi (galerie ou caméra)
+function getChosenFile() {
+  return elCam.files?.[0] || elFile.files?.[0] || null;
 }
-const MAP = [
-  { keys: ['crack','fissure','fracture'], patho:'Fissures', degre:"Intervention à court terme", urgence:"Urgent" },
-  { keys: ['corrosion','rust','rouille'], patho:'Corrosion des armatures', degre:"Réparation planifiée", urgence:"Moyen" },
-  { keys: ['spall','eclatement','spalling'], patho:'Éclatement du béton', degre:"Réparation immédiate", urgence:"Très urgent" },
-  { keys: ['efflorescence','salt','salpetre'], patho:'Efflorescences', degre:"Observation / Entretien", urgence:"Faible" },
-  { keys: ['vegetation','moss','mousse','plante','herbe'], patho:'Végétation et mousses', degre:"Entretien", urgence:"Faible" },
-  { keys: ['leak','water','humidity','humidite','infiltration','moisture','wet'], patho:'Infiltrations / Humidité', degre:"Diagnostic complémentaire", urgence:"Moyen" },
-  { keys: ['deformation','buckling','warp','bow'], patho:'Déformations', degre:"Contrôle / Surveillance renforcée", urgence:"Moyen à urgent" },
-  { keys: ['spalled concrete','chipping','eclatement beton'], patho:'Altération du béton', degre:"Réparation planifiée", urgence:"Moyen" },
-];
-function interpretTop(top) {
-  const rows = [];
-  for (const {label, score} of (top || [])) {
-    const L = String(label || '').toLowerCase();
-    let best = null;
-    for (const m of MAP) { if (m.keys.some(k => L.includes(k))) { best = m; break; } }
-    rows.push({label, score, patho: best?.patho||'—', degre: best?.degre||'—', urgence: best?.urgence||'—'});
-  }
-  return rows;
-}
-function renderInterpretation(rows) {
-  const tbody = document.querySelector('#interpretation tbody');
-  tbody.innerHTML = rows.map(r => `<tr>
-    <td>${r.label} (${(r.score*100).toFixed(1)}%)</td>
-    <td>${r.patho}</td>
-    <td>${r.degre}</td>
-    <td>${r.urgence}</td>
-  </tr>`).join('');
-}
-document.getElementById('btn-analyser').addEventListener('click', async () => {
-  const f = pickFile();
-  if (!f) { alert('Choisis ou prends une photo.'); return; }
-  renderJSON('result', {status:'uploading', name:f.name, size:f.size});
-  const form = new FormData();
-  form.append('image', f);
-  form.append('config', JSON.stringify(readJSON()));
-  form.append('ouvrage', document.getElementById('ouvrage').value || '');
-  form.append('auteur', document.getElementById('auteur').value || '');
+
+// --- Action: diagnostiquer
+elBtn.addEventListener("click", async () => {
+  const file = getChosenFile();
+  if (!file) { setStatus("Choisis ou prends une photo."); return; }
+
+  elBtn.disabled = true;
+  setStatus("Analyse en cours…");
+
+  // Construire le FormData pour /api/predict
+  const fd = new FormData();
+  fd.append("image", file, file.name);
+  fd.append("ouvrage", elOuvrage.value || "");
+  fd.append("auteur",  elAuteur.value  || "");
+  fd.append("config",  elCfg.value     || "[]");
+
   try {
-    const r = await fetch('/api/predict', { method:'POST', body: form });
+    const r = await fetch("/api/predict", { method: "POST", body: fd });
+    if (!r.ok) throw new Error(`Erreur serveur (${r.status})`);
     const data = await r.json();
-    renderJSON('result', data);
-    renderInterpretation(interpretTop(data.top));
+
+    // data.top = [{label, score}] (selon l’API fournie côté /api/predict)
+    const top = (data.top || data || []).slice(0, 8);
+
+    // Tableau résultats bruts
+    tbRes.innerHTML = top.map(x =>
+      `<tr><td>${x.label}</td><td>${(x.score*100).toFixed(1)} %</td></tr>`
+    ).join("") || `<tr><td colspan="2" class="muted">Aucun résultat</td></tr>`;
+
+    // Interprétation SNCF
+    const seen = new Set();
+    tbScnf.innerHTML = top.map(x => {
+      if (seen.has(x.label.toLowerCase())) return "";
+      seen.add(x.label.toLowerCase());
+
+      const m = mapSNCF(x.label);
+      const urg = m.u === "red" ? pill(m.urgence,"red")
+               : m.u === "amber" ? pill(m.urgence,"amber")
+               : pill(m.urgence,"vert");
+
+      return `<tr>
+        <td>${x.label}</td>
+        <td>${m.degre}</td>
+        <td>${urg}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="3" class="muted">Rien à interpréter</td></tr>`;
+
+    setStatus("Terminé ✅");
   } catch (e) {
-    renderJSON('result', { ok:false, error: e.message });
+    console.error(e);
+    setStatus("Erreur : " + e.message);
+  } finally {
+    elBtn.disabled = false;
   }
 });
-document.getElementById('btn-clear').addEventListener('click', () => {
-  document.getElementById('result').textContent = 'En attente…';
-  document.querySelector('#interpretation tbody').innerHTML = '';
-  document.getElementById('file').value = '';
-  document.getElementById('camera').value = '';
-});
-document.getElementById('btn-export').addEventListener('click', () => {
-  const res = document.getElementById('result').textContent;
-  const table = document.querySelector('#interpretation').outerHTML;
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rapport DiagGC</title>
-  <style>
-    body{font-family:Inter,system-ui;padding:24px}
-    pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-radius:8px}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
-    th,td{border:1px solid #ddd;padding:6px;text-align:left}
-    th{background:#f3f4f6}
-  </style>
-  </head><body>
-  <h1>Rapport DiagGC</h1>
-  <p><b>Ouvrage :</b> ${ (document.getElementById('ouvrage').value || '—') }</p>
-  <p><b>Auteur :</b> ${ (document.getElementById('auteur').value || '—') }</p>
-  <h3>Résultats IA</h3>
-  <pre>${res.replace(/[&<>]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[s]))}</pre>
-  <h3>Interprétation SNCF</h3>
-  ${table}
-  </body></html>`;
-  const w = window.open('', '_blank'); w.document.write(html); w.document.close(); w.focus(); w.print();
+
+// --- Effacer
+elClr.addEventListener("click", () => {
+  elFile.value = ""; elCam.value=""; tbRes.innerHTML = ""; tbScnf.innerHTML = "";
+  setStatus("En attente…");
 });
